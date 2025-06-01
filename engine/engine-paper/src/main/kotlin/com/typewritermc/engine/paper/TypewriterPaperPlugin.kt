@@ -1,11 +1,14 @@
 package com.typewritermc.engine.paper
 
 import com.github.retrooper.packetevents.PacketEvents
+import com.github.shynixn.mccoroutine.bukkit.launch
+import com.github.shynixn.mccoroutine.bukkit.minecraftDispatcher
 import com.google.gson.Gson
+import com.typewritermc.engine.paper.facts.storage.CompositeFactStorage
+import com.typewritermc.engine.paper.facts.storage.RedisFactStorage
 import com.typewritermc.core.TypewriterCore
 import com.typewritermc.core.interaction.SessionTracker
 import com.typewritermc.core.serialization.createDataSerializerGson
-import com.typewritermc.core.utils.launch
 import com.typewritermc.engine.paper.command.TypewriterCommandManager
 import com.typewritermc.engine.paper.content.ContentHandler
 import com.typewritermc.engine.paper.entry.*
@@ -33,12 +36,11 @@ import com.typewritermc.engine.paper.ui.ClientSynchronizer
 import com.typewritermc.engine.paper.ui.CommunicationHandler
 import com.typewritermc.engine.paper.ui.PanelHost
 import com.typewritermc.engine.paper.ui.Writers
-import com.typewritermc.engine.paper.utils.Sync
+import com.typewritermc.engine.paper.utils.ThreadType
 import com.typewritermc.engine.paper.utils.createBukkitDataParser
 import com.typewritermc.loader.DependencyChecker
 import io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import lirand.api.architecture.KotlinPlugin
 import org.bukkit.plugin.Plugin
@@ -65,6 +67,7 @@ import kotlin.time.Duration.Companion.seconds
 class TypewriterPaperPlugin : KotlinPlugin(), KoinComponent {
     override fun onLoad() {
         super.onLoad()
+        ThreadType.initialize()
         val modules = module {
             single { this@TypewriterPaperPlugin } withOptions
                     {
@@ -99,7 +102,13 @@ class TypewriterPaperPlugin : KotlinPlugin(), KoinComponent {
             singleOf(::PanelHost)
             singleOf<SnippetDatabase>(::SnippetDatabaseImpl)
             singleOf(::FactDatabase)
-            singleOf<FactStorage>(::FileFactStorage)
+            //s
+            single<FactStorage> {
+                CompositeFactStorage(
+                    redisStorage = RedisFactStorage(),
+                    fileStorage = FileFactStorage()
+                )
+            }
             singleOf(::EntryListeners)
             singleOf(::AudienceManager)
             singleOf<AssetStorage>(::LocalAssetStorage)
@@ -125,8 +134,6 @@ class TypewriterPaperPlugin : KotlinPlugin(), KoinComponent {
             factory<Gson>(named("bukkitDataParser")) { createBukkitDataParser() }
 
             single<ClassLoader>(named("globalClassloader")) { globalClassloader() }
-
-            factory<Boolean>(named("isEnabled")) { isEnabled }
         }
         startKoin {
             modules(modules, TypewriterCore.module, dataSerializerModule)
@@ -160,9 +167,10 @@ class TypewriterPaperPlugin : KotlinPlugin(), KoinComponent {
                 manager.registerCommands()
             }
         }
+
         // We want to initialize all the extensions after all the plugins have been enabled to make sure
         // that all the plugins are loaded.
-        Dispatchers.Sync.launch {
+        launch(minecraftDispatcher) {
             delay(100)
             load()
             get<CommunicationHandler>().initialize()
@@ -228,6 +236,7 @@ class TypewriterPaperPlugin : KotlinPlugin(), KoinComponent {
         get<EntityHandler>().shutdown()
 
         unload()
+        ThreadType.shutdown()
     }
 }
 
